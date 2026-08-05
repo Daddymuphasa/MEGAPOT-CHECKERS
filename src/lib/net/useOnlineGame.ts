@@ -8,6 +8,7 @@ import { RoomConnection } from "./client";
 import { seatToPlayer, type RoomEvent, type RoomPlayer, type Seat } from "./protocol";
 import { inco } from "@/lib/inco/client";
 import { assignPowers } from "@/lib/inco/powers";
+import { useWagerStore } from "@/lib/megapot/wager-store";
 import { sound } from "@/lib/sound";
 
 export type OnlinePhase =
@@ -28,11 +29,12 @@ export interface OnlineState {
   players: RoomPlayer[];
   withPowers: boolean;
   wagerEnabled: boolean;
-  buyInEth: string;
+  /** Winner-takes-all stake in whole dollars (0 = friendly game). */
+  stakeUsd: number;
   // Inco / wager
   myCommitted: boolean;
   oppCommitted: boolean;
-  myConfidence: number;
+  myStake: number;
   reveal: { mine?: number; theirs?: number } | null;
   settleTx: string | null;
   toast: { id: number; text: string; kind: "power" | "info" } | null;
@@ -41,7 +43,7 @@ export interface OnlineState {
 const initialInco = {
   myCommitted: false,
   oppCommitted: false,
-  myConfidence: 50,
+  myStake: 0,
   reveal: null as OnlineState["reveal"],
   settleTx: null as string | null,
   toast: null as OnlineState["toast"],
@@ -62,7 +64,7 @@ export function useOnlineGame() {
     players: [],
     withPowers: true,
     wagerEnabled: true,
-    buyInEth: "0.001",
+    stakeUsd: 0,
     ...initialInco,
   });
   const patch = (p: Partial<OnlineState>) => setState((s) => ({ ...s, ...p }));
@@ -97,6 +99,7 @@ export function useOnlineGame() {
           players: ev.snapshot.players,
           withPowers: ev.snapshot.withPowers,
           wagerEnabled: ev.snapshot.wagerEnabled,
+          stakeUsd: ev.snapshot.stakeUsd ?? 0,
         });
         // Replay any moves we missed (reconnect).
         if (ev.snapshot.moves.length) {
@@ -225,8 +228,7 @@ export function useOnlineGame() {
   async function create(opts: {
     name: string;
     withPowers: boolean;
-    wagerEnabled: boolean;
-    buyInEth: string;
+    stakeUsd: number;
     address?: string;
   }) {
     patch({ busy: true, error: null });
@@ -235,7 +237,8 @@ export function useOnlineGame() {
         name: opts.name,
         address: opts.address,
         withPowers: opts.withPowers,
-        wagerEnabled: opts.wagerEnabled,
+        wagerEnabled: opts.stakeUsd > 0,
+        stakeUsd: opts.stakeUsd,
       });
       const c = new RoomConnection();
       conn.current = c;
@@ -256,8 +259,8 @@ export function useOnlineGame() {
         seat: "host",
         mySide: "red",
         withPowers: opts.withPowers,
-        wagerEnabled: opts.wagerEnabled,
-        buyInEth: opts.buyInEth,
+        wagerEnabled: opts.stakeUsd > 0,
+        stakeUsd: opts.stakeUsd,
         players: [{ seat: "host", name: opts.name, ready: false }],
       });
     } catch (e) {
@@ -293,6 +296,7 @@ export function useOnlineGame() {
         mySide: side,
         withPowers: snapshot.withPowers,
         wagerEnabled: snapshot.wagerEnabled,
+        stakeUsd: snapshot.stakeUsd ?? 0,
         players: snapshot.players,
       });
     } catch (e) {
@@ -300,7 +304,12 @@ export function useOnlineGame() {
     }
   }
 
-  async function commit(confidence: number) {
+  /**
+   * One-shot match setup, fully automatic — no user input. Buys the entry
+   * ticket from the demo bankroll, encrypts the stake + power seed with Inco
+   * behind the scenes, and marks us ready.
+   */
+  async function commit() {
     if (!conn.current || !state.seat) return;
 
     // Rooms without Inco features (device pairing) skip the ceremony.
@@ -322,15 +331,28 @@ export function useOnlineGame() {
       return;
     }
 
-    patch({ busy: true, myConfidence: confidence });
+    const stake = state.wagerEnabled ? state.stakeUsd : 0;
+    patch({ busy: true, myStake: stake });
+
+    // Buy the entry ticket from the demo bankroll (auto top-up keeps the
+    // flow frictionless — it's demo money).
+    if (stake > 0) {
+      let w = useWagerStore.getState();
+      w.clear();
+      while (useWagerStore.getState().bankroll < stake)
+        useWagerStore.getState().topUp();
+      w = useWagerStore.getState();
+      w.buyEntry(stake);
+    }
+
     const account =
       state.players.find((p) => p.seat === state.seat)?.address ??
       `0x${state.seat}`;
-    // Encrypt the confidential blind bid + a power seed with Inco.
+    // Encrypt the confidential stake + a power seed with Inco.
     const seed = BigInt(Math.floor(Math.random() * 2 ** 31));
     myPowerSeed.current = seed;
     const [stakeEnc] = await Promise.all([
-      inco().encrypt(BigInt(confidence), account),
+      inco().encrypt(BigInt(stake), account),
       inco().encrypt(seed, account),
     ]);
 
@@ -348,11 +370,10 @@ export function useOnlineGame() {
       useGameStore.setState({ board });
     }
 
-    const buyInWei = ethToWei(state.buyInEth);
     conn.current.emit({
       type: "wager",
       stakeCommit: stakeEnc.commit,
-      buyInWei,
+      buyInWei: String(BigInt(stake) * 1_000_000n), // USDC 6-decimals
       by: state.seat,
     });
     conn.current.emit({ type: "ready", by: state.seat });
@@ -384,7 +405,7 @@ export function useOnlineGame() {
     // Here each peer broadcasts its own confidence (a commit–reveal scheme).
     conn.current.emit({
       type: "reveal",
-      powers: [{ pieceId: "confidence", power: String(state.myConfidence) }],
+      powers: [{ pieceId: "confidence", power: String(state.myStake) }],
       by: state.seat,
     });
     const tx = `0x${Array.from({ length: 64 })
@@ -395,7 +416,7 @@ export function useOnlineGame() {
         patch({
           busy: false,
           settleTx: tx,
-          reveal: { mine: state.myConfidence },
+          reveal: { mine: state.myStake },
         }),
       700,
     );
@@ -418,8 +439,3 @@ function dedupePlayers(players: RoomPlayer[]): RoomPlayer[] {
   return [...map.values()];
 }
 
-function ethToWei(eth: string): string {
-  const n = parseFloat(eth || "0");
-  if (!isFinite(n) || n <= 0) return "0";
-  return BigInt(Math.round(n * 1e6)).toString() + "000000000000";
-}

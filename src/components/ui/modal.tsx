@@ -45,7 +45,7 @@ export function Modal({
           exit={{ opacity: 0 }}
         >
           <motion.div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/70 backdrop-blur-md"
             onClick={() => dismissable && onClose?.()}
           />
           <motion.div
@@ -57,7 +57,9 @@ export function Modal({
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
             transition={{ type: "spring", stiffness: 300, damping: 26 }}
             className={cn(
-              "glass-strong relative z-10 w-full max-w-md rounded-2xl p-6",
+              "relative z-10 w-full max-w-md rounded-2xl border border-white/10 p-6",
+              "bg-[rgb(14_16_28/0.92)] backdrop-blur-2xl",
+              "shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]",
               className,
             )}
           >

@@ -31,7 +31,7 @@ export const viewport: Viewport = {
 // Set the theme class before hydration to avoid a flash of the wrong theme.
 const themeScript = `(function(){try{var s=JSON.parse(localStorage.getItem('megapot-settings')||'{}');var t=(s&&s.state&&s.state.theme)||'dark';document.documentElement.classList.toggle('dark',t!=='light');}catch(e){document.documentElement.classList.add('dark');}})();`;
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: import("react").ReactNode }) {
   return (
     <html
       lang="en"

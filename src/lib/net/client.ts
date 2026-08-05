@@ -7,6 +7,8 @@ export interface CreateOpts {
   address?: string;
   withPowers: boolean;
   wagerEnabled: boolean;
+  /** Winner-takes-all stake in whole dollars (0 = friendly game). */
+  stakeUsd: number;
 }
 
 export class RoomConnection {

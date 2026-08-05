@@ -4,8 +4,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 export type Theme = "dark" | "light";
-export type BoardSkin = "walnut" | "marble" | "neon";
-export type PieceSkin = "classic" | "modern" | "gem";
+export type BoardSkin = "walnut" | "marble" | "neon" | "chrome";
+export type PieceSkin = "classic" | "modern" | "gem" | "chrome";
 
 interface SettingsState {
   theme: Theme;
@@ -26,8 +26,8 @@ export const useSettings = create<SettingsState>()(
       theme: "dark",
       sound: true,
       haptics: true,
-      boardSkin: "walnut",
-      pieceSkin: "classic",
+      boardSkin: "chrome",
+      pieceSkin: "chrome",
       showHints: true,
       showCoords: true,
       toggleTheme: () =>

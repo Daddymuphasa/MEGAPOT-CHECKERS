@@ -37,17 +37,30 @@ export interface ButtonProps
     VariantProps<typeof button> {}
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, children, ...props }, ref) => (
-    <motion.button
-      ref={ref}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.96 }}
-      transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      className={cn(button({ variant, size }), className)}
-      {...props}
-    >
-      {children}
-    </motion.button>
-  ),
+  ({ className, variant, size, children, ...props }, ref) => {
+    const hasShimmer = variant === "primary" || variant === "gold";
+    return (
+      <motion.button
+        ref={ref}
+        whileHover={{ scale: 1.03 }}
+        whileTap={{ scale: 0.95 }}
+        transition={{ type: "spring", stiffness: 400, damping: 25 }}
+        className={cn(button({ variant, size }), "group/btn overflow-hidden", className)}
+        {...props}
+      >
+        {children as React.ReactNode}
+        {hasShimmer && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-y-0 w-1/3 opacity-0 group-hover/btn:opacity-[0.18] transition-opacity"
+            style={{
+              background: "linear-gradient(90deg, transparent, white, transparent)",
+              animation: "shimmer-sweep 2s ease-in-out infinite",
+            }}
+          />
+        )}
+      </motion.button>
+    );
+  },
 );
 Button.displayName = "Button";

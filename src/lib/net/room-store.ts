@@ -18,6 +18,7 @@ interface Room {
   started: boolean;
   withPowers: boolean;
   wagerEnabled: boolean;
+  stakeUsd: number;
   result?: string;
 }
 
@@ -42,6 +43,7 @@ function gc() {
 export function createRoom(opts: {
   withPowers: boolean;
   wagerEnabled: boolean;
+  stakeUsd: number;
   hostName: string;
   hostAddress?: string;
 }): Room {
@@ -64,6 +66,7 @@ export function createRoom(opts: {
     started: false,
     withPowers: opts.withPowers,
     wagerEnabled: opts.wagerEnabled,
+    stakeUsd: opts.stakeUsd,
   };
   rooms.set(code, room);
   return room;
@@ -102,6 +105,7 @@ export function snapshot(room: Room): RoomSnapshot {
     started: room.started,
     withPowers: room.withPowers,
     wagerEnabled: room.wagerEnabled,
+    stakeUsd: room.stakeUsd,
   };
 }
 

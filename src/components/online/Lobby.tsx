@@ -2,12 +2,11 @@
 
 import * as React from "react";
 import { motion } from "framer-motion";
-import { Plus, LogIn, Shield, Coins, Loader2, Copy, Check } from "lucide-react";
-import { Card } from "@/components/ui/card";
+import { Plus, LogIn, Shield, Coins, Loader2, Copy, Check, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { WalletButton } from "./WalletButton";
-import { incoConfig } from "@/lib/inco/config";
+import { ConnectWallet } from "@/components/megapot/ConnectWallet";
+import { useWagerStore } from "@/lib/megapot/wager-store";
 import { cn } from "@/lib/utils";
 
 export interface LobbyResult {
@@ -15,9 +14,10 @@ export interface LobbyResult {
   code?: string;
   name: string;
   withPowers: boolean;
-  wagerEnabled: boolean;
-  buyInEth: string;
+  stakeUsd: number;
 }
+
+const STAKE_OPTIONS = [0, 1, 2, 5, 10] as const;
 
 export function Lobby({
   onSubmit,
@@ -29,9 +29,7 @@ export function Lobby({
   onSubmit: (r: LobbyResult) => void;
   busy: boolean;
   error?: string | null;
-  /** Deep-linked room code (QR scan) — preselects the Join tab. */
   initialCode?: string | null;
-  /** Device pairing mode — preselects Create with Inco features off. */
   pairMode?: boolean;
 }) {
   const [tab, setTab] = React.useState<"create" | "join">(
@@ -40,8 +38,8 @@ export function Lobby({
   const [name, setName] = React.useState("");
   const [code, setCode] = React.useState(initialCode?.toUpperCase() ?? "");
   const [withPowers, setWithPowers] = React.useState(!pairMode);
-  const [wagerEnabled, setWagerEnabled] = React.useState(!pairMode);
-  const [buyIn, setBuyIn] = React.useState("0.001");
+  const [stakeUsd, setStakeUsd] = React.useState(pairMode ? 0 : 1);
+  const bankroll = useWagerStore((s) => s.bankroll);
 
   return (
     <motion.div
@@ -49,37 +47,25 @@ export function Lobby({
       animate={{ opacity: 1, y: 0 }}
       className="w-full max-w-md"
     >
-      <Card className="p-7">
-        <div className="mb-5 flex items-center justify-between">
-          <div>
-            <h1 className="font-display text-2xl font-bold">Play Online</h1>
-            <p className="text-sm text-muted">Private matches on Base</p>
-          </div>
-          <WalletButton />
+      <div className="glass-hero relative overflow-hidden rounded-3xl p-7">
+        {/* Shimmer */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-3xl">
+          <div
+            className="absolute inset-y-0 w-1/3 opacity-[0.06]"
+            style={{
+              background: "linear-gradient(90deg, transparent, white, transparent)",
+              animation: "shimmer-sweep 4s ease-in-out infinite",
+            }}
+          />
         </div>
+        <h1 className="relative mb-6 text-center font-display text-3xl font-black tracking-wide">
+          <span className="text-chrome animate-neon-pulse">
+            {tab === "create" ? "CREATE ARENA" : "JOIN THE FIGHT"}
+          </span>
+        </h1>
 
-        <div className="mb-5 grid grid-cols-2 gap-2 rounded-full border border-border bg-surface-2/50 p-1">
-          {(["create", "join"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={cn(
-                "relative h-9 rounded-full text-sm font-medium capitalize transition-colors",
-                tab === t ? "text-white" : "text-muted",
-              )}
-            >
-              {tab === t && (
-                <motion.span
-                  layoutId="lobby-tab"
-                  className="absolute inset-0 -z-10 rounded-full brand-gradient"
-                />
-              )}
-              {t === "create" ? "Create room" : "Join room"}
-            </button>
-          ))}
-        </div>
-
-        <label className="mb-1.5 block text-sm font-medium text-muted">
+        {/* Display name */}
+        <label className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-muted">
           Display name
         </label>
         <input
@@ -87,93 +73,125 @@ export function Lobby({
           onChange={(e) => setName(e.target.value)}
           placeholder="Satoshi"
           maxLength={24}
-          className="mb-4 w-full rounded-xl border border-border bg-surface-2/50 px-4 py-2.5 text-sm outline-none transition-colors focus:border-brand/60 focus-visible:ring-focus"
+          className="mb-5 w-full rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm outline-none transition-colors placeholder:text-white/30 focus:border-brand/50 focus-visible:ring-focus"
         />
 
-        {tab === "join" ? (
+        {tab === "create" ? (
+          <div className="mb-5 space-y-4">
+            {/* Hidden powers toggle */}
+            <label className="glass-pill flex items-center justify-between gap-3 rounded-full px-5 py-3">
+              <span className="flex items-center gap-2 text-sm">
+                <Shield className="h-4 w-4 text-brand-3" />
+                Hidden powers
+              </span>
+              <Switch checked={withPowers} onChange={setWithPowers} />
+            </label>
+
+            {/* Stake picker */}
+            <div className="glass-pill rounded-2xl p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="flex items-center gap-2 text-sm">
+                  <Coins className="h-4 w-4 text-gold" />
+                  Entry ticket
+                </span>
+                <span className="text-xs text-muted">Bankroll ${bankroll}</span>
+              </div>
+              <div className="grid grid-cols-5 gap-2">
+                {STAKE_OPTIONS.map((w) => (
+                  <button
+                    key={w}
+                    onClick={() => setStakeUsd(w)}
+                    className={cn(
+                      "rounded-full border py-2 text-sm font-semibold tabular-nums transition-all",
+                      stakeUsd === w
+                        ? "border-gold/60 bg-gold/10 text-gold"
+                        : "border-white/10 bg-white/5 hover:border-white/20",
+                    )}
+                  >
+                    {w === 0 ? "Free" : `$${w}`}
+                  </button>
+                ))}
+              </div>
+              {stakeUsd > 0 && (
+                <p className="mt-2 text-xs text-muted">
+                  Both stake ${stakeUsd} — winner takes ${stakeUsd * 2}.
+                </p>
+              )}
+            </div>
+          </div>
+        ) : (
           <>
-            <label className="mb-1.5 block text-sm font-medium text-muted">
+            <label className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-muted">
               Room code
             </label>
             <input
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               placeholder="KX7-9QP"
-              className="mb-4 w-full rounded-xl border border-border bg-surface-2/50 px-4 py-2.5 font-mono text-lg tracking-widest outline-none transition-colors focus:border-brand/60"
+              className="mb-5 w-full rounded-full border border-white/10 bg-white/5 px-5 py-3 font-mono text-lg tracking-widest outline-none transition-colors placeholder:text-white/30 focus:border-brand/50"
             />
           </>
-        ) : (
-          <div className="mb-4 space-y-3 rounded-xl border border-border bg-surface-2/30 p-4">
-            <label className="flex items-center justify-between gap-3">
-              <span className="flex items-center gap-2 text-sm">
-                <Shield className="h-4 w-4 text-brand-3" />
-                Hidden power-ups
-                <span className="rounded-full bg-brand/15 px-2 py-0.5 text-[10px] font-semibold text-brand">
-                  INCO
-                </span>
-              </span>
-              <Switch checked={withPowers} onChange={setWithPowers} />
-            </label>
-            <label className="flex items-center justify-between gap-3">
-              <span className="flex items-center gap-2 text-sm">
-                <Coins className="h-4 w-4 text-gold" />
-                Confidential wager
-              </span>
-              <Switch checked={wagerEnabled} onChange={setWagerEnabled} />
-            </label>
-            {wagerEnabled && (
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  value={buyIn}
-                  onChange={(e) => setBuyIn(e.target.value)}
-                  inputMode="decimal"
-                  className="w-24 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm outline-none focus:border-brand/60"
-                />
-                <span className="text-sm text-muted">ETH buy-in each</span>
-              </div>
-            )}
-          </div>
         )}
 
         {error && (
-          <p className="mb-3 rounded-lg bg-bad/10 px-3 py-2 text-sm text-bad">
+          <p className="mb-3 rounded-full bg-bad/10 px-4 py-2 text-center text-sm text-bad">
             {error}
           </p>
         )}
 
-        <Button
-          size="lg"
-          className="w-full"
-          disabled={busy || (tab === "join" && code.trim().length < 3)}
-          onClick={() =>
-            onSubmit({
-              action: tab,
-              code: code.trim(),
-              name: name.trim() || (tab === "create" ? "Host" : "Guest"),
-              withPowers,
-              wagerEnabled,
-              buyInEth: buyIn,
-            })
-          }
-        >
-          {busy ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : tab === "create" ? (
-            <Plus className="h-5 w-5" />
-          ) : (
-            <LogIn className="h-5 w-5" />
-          )}
-          {tab === "create" ? "Create private room" : "Join room"}
-        </Button>
+        {/* Main action buttons */}
+        <div className="space-y-3">
+          <Button
+            size="lg"
+            className={cn(
+              "w-full",
+              tab === "create" ? "" : "variant-secondary",
+            )}
+            disabled={busy || (tab === "join" && code.trim().length < 3)}
+            onClick={() =>
+              onSubmit({
+                action: tab,
+                code: code.trim(),
+                name: name.trim() || (tab === "create" ? "Host" : "Guest"),
+                withPowers,
+                stakeUsd: tab === "create" ? stakeUsd : 0,
+              })
+            }
+          >
+            {busy ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : tab === "create" ? (
+              <Plus className="h-5 w-5" />
+            ) : (
+              <LogIn className="h-5 w-5" />
+            )}
+            {tab === "create" ? "CREATE PRIVATE ROOM" : "JOIN ROOM"}
+          </Button>
 
-        <p className="mt-4 text-center text-xs text-muted">
-          {incoConfig.mode === "live" ? (
-            <>Live · Inco Lightning on Base Sepolia</>
-          ) : (
-            <>Demo mode · Inco encryption simulated locally (no wallet needed)</>
-          )}
-        </p>
-      </Card>
+          <button
+            onClick={() => setTab(tab === "create" ? "join" : "create")}
+            className="glass-pill mx-auto flex w-full items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-medium text-white/70 transition-colors hover:text-white"
+          >
+            {tab === "create" ? (
+              <>
+                <LogIn className="h-4 w-4" />
+                JOIN WITH CODE
+              </>
+            ) : (
+              <>
+                <Plus className="h-4 w-4" />
+                CREATE ROOM INSTEAD
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Wallet connect at bottom */}
+        <div className="mt-5 flex items-center justify-center gap-3">
+          <Lock className="h-4 w-4 text-muted" />
+          <ConnectWallet />
+        </div>
+      </div>
     </motion.div>
   );
 }
@@ -187,7 +205,7 @@ export function CopyCode({ code }: { code: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
-      className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-1.5 font-mono text-lg tracking-widest transition-colors hover:border-brand/50"
+      className="glass-pill inline-flex items-center gap-2 rounded-full px-5 py-2 font-mono text-lg tracking-widest transition-colors hover:border-white/20"
     >
       {code}
       {copied ? (

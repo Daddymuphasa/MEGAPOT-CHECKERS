@@ -28,6 +28,7 @@ import { PairPanel } from "@/components/local/PairPanel";
 import { Web3Provider } from "@/components/online/Web3Provider";
 import { useOnlineGame } from "@/lib/net/useOnlineGame";
 import { useGameStore } from "@/store/game-store";
+import { useWagerStore } from "@/lib/megapot/wager-store";
 import { incoConfig } from "@/lib/inco/config";
 import { OTHER } from "@/lib/game/types";
 import { cn } from "@/lib/utils";
@@ -56,38 +57,46 @@ function OnlineInner() {
   const captured = useGameStore((s) => s.captured);
   const resign = useGameStore((s) => s.resign);
 
-  const [confidence, setConfidence] = React.useState(70);
+  const wagerOutcome = useWagerStore((s) => s.outcome);
 
-  // When the game ends in online mode, report the winner once.
+  // When the game ends in online mode, report the winner, settle the pot
+  // locally, and reveal + settle with Inco — all automatic, no buttons.
   const reported = React.useRef(false);
   React.useEffect(() => {
     if (state.phase !== "playing" || result.kind === "playing" || reported.current)
       return;
     reported.current = true;
     reportWinner(result.kind === "win" ? result.winner : "draw");
+    if (state.stakeUsd > 0) {
+      useWagerStore
+        .getState()
+        .settle(
+          result.kind === "draw"
+            ? "draw"
+            : result.kind === "win" && result.winner === state.mySide
+              ? "win"
+              : "lose",
+        );
+    }
+    revealStakes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.kind, state.phase]);
 
-  // Plain paired rooms (no Inco features) skip the commit ceremony.
+  // Match setup is fully automatic — stakes and hidden powers are sealed
+  // behind the scenes the moment both players are in the room.
   React.useEffect(() => {
-    if (
-      state.phase === "committing" &&
-      !state.withPowers &&
-      !state.wagerEnabled &&
-      !state.myCommitted
-    ) {
-      commit(50);
+    if (state.phase === "committing" && !state.myCommitted && !state.busy) {
+      commit();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.phase, state.withPowers, state.wagerEnabled, state.myCommitted]);
+  }, [state.phase, state.myCommitted, state.busy]);
 
   const onLobby = (r: LobbyResult) => {
     if (r.action === "create") {
       create({
         name: r.name,
         withPowers: r.withPowers,
-        wagerEnabled: r.wagerEnabled,
-        buyInEth: r.buyInEth,
+        stakeUsd: r.stakeUsd,
         address,
       });
     } else if (r.code) {
@@ -166,81 +175,28 @@ function OnlineInner() {
           animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-md"
         >
-          <Card className="p-7">
-            <Badge className="mb-4 border-brand/40 bg-brand/10 text-brand">
-              <Lock className="h-3.5 w-3.5" />
-              Private mode — powered by Inco Lightning
-            </Badge>
-            <h2 className="font-display text-2xl font-bold">
-              Seal your secrets
+          <Card className="p-7 text-center">
+            <Loader2 className="mx-auto h-8 w-8 animate-spin text-brand" />
+            <h2 className="mt-4 font-display text-xl font-bold">
+              Setting up match…
             </h2>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              Before the first move, both players encrypt two values with{" "}
-              <span className="text-text">Inco Lightning</span>:
+            <p className="mt-2 text-sm text-muted">
+              {state.stakeUsd > 0
+                ? `$${state.stakeUsd} each · winner takes $${state.stakeUsd * 2}`
+                : "Friendly game"}
+              {state.withPowers && " · hidden powers active"}
             </p>
-            <ul className="mt-3 space-y-2 text-sm text-muted">
-              <li className="flex gap-2">
-                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-brand-3" />
-                A <span className="text-text">power seed</span> that secretly
-                grants 3 of your pieces hidden abilities — revealed only when
-                captured.
-              </li>
-              <li className="flex gap-2">
-                <Coins className="mt-0.5 h-4 w-4 shrink-0 text-gold" />A{" "}
-                <span className="text-text">blind confidence bid</span> (0–100)
-                — how sure you are you&apos;ll win. Both stay encrypted until
-                the game ends.
-              </li>
-            </ul>
-
-            <div className="mt-6">
-              <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="font-medium">Confidence</span>
-                <span className="rounded-md bg-surface-2 px-2 py-0.5 font-mono text-brand">
-                  {confidence}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={confidence}
-                disabled={state.myCommitted}
-                onChange={(e) => setConfidence(parseInt(e.target.value))}
-                className="w-full accent-[rgb(124,92,246)]"
-                aria-label="Confidence bid"
-              />
-            </div>
-
-            <Button
-              size="lg"
-              className="mt-6 w-full"
-              disabled={state.busy || state.myCommitted}
-              onClick={() => commit(confidence)}
-            >
-              {state.busy ? (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Encrypting with Inco…
-                </>
-              ) : state.myCommitted ? (
-                "Sealed ✓ waiting for opponent"
-              ) : (
-                <>
-                  <Lock className="h-5 w-5" />
-                  Encrypt & commit
-                </>
-              )}
-            </Button>
-
-            <div className="mt-4 flex items-center justify-center gap-4 text-xs text-muted">
+            <div className="mt-6 flex items-center justify-center gap-4 text-xs text-muted">
               <span className={cn(state.myCommitted && "text-good")}>
-                You {state.myCommitted ? "✓" : "…"}
+                You {state.myCommitted ? "ready" : "…"}
               </span>
               <span className={cn(state.oppCommitted && "text-good")}>
-                Opponent {state.oppCommitted ? "✓" : "…"}
+                Opponent {state.oppCommitted ? "ready" : "…"}
               </span>
             </div>
+            <Button variant="ghost" className="mt-4" onClick={leave}>
+              Cancel
+            </Button>
           </Card>
         </motion.div>
       </Shell>
@@ -283,11 +239,36 @@ function OnlineInner() {
         board={<Board viewerSide={mySide} />}
         side={
           <>
+            {state.stakeUsd > 0 && (
+              <Card>
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Coins className="h-4 w-4 text-gold" />
+                  Winner takes all
+                </div>
+                <div className="mt-2 space-y-1 text-xs text-muted">
+                  <div className="flex justify-between">
+                    <span>Pot</span>
+                    <span className="font-mono font-semibold text-gold">
+                      ${state.stakeUsd * 2}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Each player</span>
+                    <span className="font-mono">${state.stakeUsd}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Bankroll</span>
+                    <span className="font-mono">${useWagerStore.getState().bankroll}</span>
+                  </div>
+                </div>
+              </Card>
+            )}
+
             <Card>
               <div className="flex items-center justify-between">
                 <Badge className="border-brand/40 bg-brand/10 text-brand">
                   <Lock className="h-3 w-3" />
-                  Inco Private Mode
+                  Private Mode
                 </Badge>
                 <span className="flex items-center gap-1.5 text-xs text-muted">
                   {state.connected ? (
@@ -301,21 +282,19 @@ function OnlineInner() {
                   )}
                 </span>
               </div>
-              <div className="mt-3 space-y-2 text-xs leading-relaxed text-muted">
-                <p>
-                  <Shield className="mr-1 inline h-3.5 w-3.5 text-brand-3" />
-                  3 of your pieces carry hidden powers (only you can see them).
-                </p>
-                <p>
-                  <Coins className="mr-1 inline h-3.5 w-3.5 text-gold" />
-                  Blind bids stay encrypted until the end.
-                </p>
-                <p className="text-[10px] uppercase tracking-wider opacity-70">
-                  {incoConfig.mode === "live"
-                    ? "Live on Base Sepolia"
-                    : "Demo: encryption simulated"}
-                </p>
-              </div>
+              {state.withPowers && (
+                <div className="mt-3 space-y-2 text-xs leading-relaxed text-muted">
+                  <p>
+                    <Shield className="mr-1 inline h-3.5 w-3.5 text-brand-3" />
+                    3 of your pieces carry hidden powers.
+                  </p>
+                  <p className="text-[10px] uppercase tracking-wider opacity-70">
+                    {incoConfig.mode === "live"
+                      ? "Live on Base Sepolia"
+                      : "Demo mode"}
+                  </p>
+                </div>
+              )}
             </Card>
 
             <Card>
@@ -358,11 +337,29 @@ function OnlineInner() {
           router.push("/");
         }}
       >
+        {state.stakeUsd > 0 && wagerOutcome && (
+          <div
+            className={cn(
+              "rounded-xl border p-3 text-center text-sm font-semibold",
+              wagerOutcome === "win"
+                ? "border-gold/40 bg-gold/10 text-gold"
+                : wagerOutcome === "draw"
+                  ? "border-border bg-surface-2/50 text-muted"
+                  : "border-bad/30 bg-bad/10 text-bad",
+            )}
+          >
+            {wagerOutcome === "win"
+              ? `You won $${state.stakeUsd * 2}!`
+              : wagerOutcome === "draw"
+                ? `Draw — $${state.stakeUsd} refunded`
+                : `You lost $${state.stakeUsd}`}
+          </div>
+        )}
         <SettlePanel
           reveal={state.reveal}
           settleTx={state.settleTx}
           busy={state.busy}
-          onReveal={revealStakes}
+          stakeUsd={state.stakeUsd}
         />
       </EndGameModal>
     </>
@@ -373,47 +370,50 @@ function SettlePanel({
   reveal,
   settleTx,
   busy,
-  onReveal,
+  stakeUsd,
 }: {
   reveal: { mine?: number; theirs?: number } | null;
   settleTx: string | null;
   busy: boolean;
-  onReveal: () => void;
+  stakeUsd: number;
 }) {
+  if (stakeUsd === 0 && !settleTx) return null;
   return (
     <div className="rounded-xl border border-brand/30 bg-brand/5 p-4 text-left">
       <div className="flex items-center gap-2 text-sm font-semibold">
-        <Lock className="h-4 w-4 text-brand" />
-        Inco settlement
+        <Coins className="h-4 w-4 text-gold" />
+        Match stakes
       </div>
       {!settleTx ? (
-        <>
-          <p className="mt-2 text-xs leading-relaxed text-muted">
-            Reveal the blind confidence bids and settle on-chain. Until now,
-            neither side could see the other&apos;s bid.
-          </p>
-          <Button
-            size="sm"
-            className="mt-3 w-full"
-            disabled={busy}
-            onClick={onReveal}
-          >
-            {busy ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              "Reveal & settle"
-            )}
-          </Button>
-        </>
+        <div className="mt-2 space-y-1.5 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted">Your stake</span>
+            <span className="font-mono">${reveal?.mine ?? stakeUsd}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted">Opponent stake</span>
+            <span className="font-mono">
+              {reveal?.theirs != null ? `$${reveal.theirs}` : "sealed"}
+            </span>
+          </div>
+          {busy && (
+            <div className="flex items-center gap-1.5 pt-1 text-xs text-muted">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Settling…
+            </div>
+          )}
+        </div>
       ) : (
         <div className="mt-2 space-y-1.5 text-sm">
           <div className="flex justify-between">
-            <span className="text-muted">Your bid</span>
-            <span className="font-mono">{reveal?.mine ?? "—"}</span>
+            <span className="text-muted">Your stake</span>
+            <span className="font-mono">${reveal?.mine ?? stakeUsd}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted">Opponent bid</span>
-            <span className="font-mono">{reveal?.theirs ?? "waiting…"}</span>
+            <span className="text-muted">Opponent stake</span>
+            <span className="font-mono">
+              {reveal?.theirs != null ? `$${reveal.theirs}` : "…"}
+            </span>
           </div>
           <a
             className="mt-1 flex items-center gap-1 text-xs text-brand hover:underline"

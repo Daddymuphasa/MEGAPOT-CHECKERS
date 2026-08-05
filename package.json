@@ -7,11 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "inco:deploy": "node scripts/deploy-inco.mjs"
+    "inco:deploy": "node scripts/deploy-inco.mjs",
+    "escrow:deploy": "node scripts/deploy-escrow.mjs"
   },
   "dependencies": {
     "@inco/js": "^0.7.12",
     "@inco/lightning": "^1.0.2",
+    "@openzeppelin/contracts": "^5.4.0",
     "@tanstack/react-query": "^5.101.4",
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",

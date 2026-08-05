@@ -40,4 +40,6 @@ export interface RoomSnapshot {
   started: boolean;
   withPowers: boolean;
   wagerEnabled: boolean;
+  /** Winner-takes-all stake in whole dollars (0 = friendly game). */
+  stakeUsd: number;
 }

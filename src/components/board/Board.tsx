@@ -7,6 +7,7 @@ import { useSettings, type BoardSkin } from "@/store/settings-store";
 import { SIZE, samePos } from "@/lib/game/engine";
 import { OTHER, type Move, type Player, type Pos } from "@/lib/game/types";
 import { sound, haptic } from "@/lib/sound";
+import { cn } from "@/lib/utils";
 import { PieceToken } from "./Piece";
 
 /* ---------- board skins ---------- */
@@ -38,6 +39,15 @@ const SKINS: Record<
     dark: "linear-gradient(145deg,#171a2b,#0d1020)",
     lightTx: "none",
     darkTx: "none",
+  },
+  chrome: {
+    frame: "linear-gradient(145deg,#1a1d2e,#0c0e18,#181b2a)",
+    light: "linear-gradient(145deg,rgba(180,190,220,.12),rgba(140,150,180,.06))",
+    dark: "linear-gradient(145deg,#12141f,#0a0c14)",
+    lightTx:
+      "radial-gradient(ellipse 100% 100% at 30% 20%,rgba(140,160,220,.08),transparent 60%)",
+    darkTx:
+      "radial-gradient(ellipse 100% 100% at 70% 80%,rgba(100,120,180,.05),transparent 60%)",
   },
 };
 
@@ -113,6 +123,10 @@ export function Board({ onMoveSettled, viewerSide, interactive = true }: BoardPr
   React.useEffect(() => {
     sound.setEnabled(soundOn);
   }, [soundOn]);
+
+  React.useEffect(() => {
+    sound.setSkin(boardSkin === "chrome" ? "chrome" : "classic");
+  }, [boardSkin]);
 
   // Fire feedback + release the input lock when a move settles.
   React.useEffect(() => {
@@ -227,7 +241,12 @@ export function Board({ onMoveSettled, viewerSide, interactive = true }: BoardPr
       aria-label="Checkers board"
       tabIndex={interactive ? 0 : -1}
       onKeyDown={onKeyDown}
-      className="relative aspect-square w-full select-none rounded-[7%] shadow-[0_40px_80px_-40px_rgba(0,0,0,.7)] outline-none focus-visible:ring-focus"
+      className={cn(
+        "relative aspect-square w-full select-none rounded-[7%] outline-none focus-visible:ring-focus",
+        boardSkin === "chrome"
+          ? "shadow-[0_40px_100px_-30px_rgba(100,120,200,.25),0_20px_60px_-20px_rgba(0,0,0,.7)]"
+          : "shadow-[0_40px_80px_-40px_rgba(0,0,0,.7)]",
+      )}
       style={{ background: skin.frame, padding: framePad }}
     >
       {/* inner bevel */}
@@ -235,10 +254,22 @@ export function Board({ onMoveSettled, viewerSide, interactive = true }: BoardPr
         className="pointer-events-none absolute rounded-[4%]"
         style={{
           inset: framePad * 0.45,
-          boxShadow:
-            "inset 0 2px 6px rgba(255,255,255,.12), inset 0 -6px 20px rgba(0,0,0,.45)",
+          boxShadow: boardSkin === "chrome"
+            ? "inset 0 1px 3px rgba(180,200,255,.15), inset 0 -4px 16px rgba(0,0,0,.5), 0 0 20px rgba(100,120,200,.06)"
+            : "inset 0 2px 6px rgba(255,255,255,.12), inset 0 -6px 20px rgba(0,0,0,.45)",
         }}
       />
+      {/* Chrome board edge glow */}
+      {boardSkin === "chrome" && (
+        <div
+          className="pointer-events-none absolute rounded-[7%]"
+          style={{
+            inset: -1,
+            border: "1px solid rgba(140,160,220,.12)",
+            background: "linear-gradient(180deg, rgba(180,200,255,.06) 0%, transparent 30%, transparent 70%, rgba(100,120,200,.04) 100%)",
+          }}
+        />
+      )}
 
       {width > 0 && (
         <div
@@ -284,11 +315,26 @@ export function Board({ onMoveSettled, viewerSide, interactive = true }: BoardPr
                   />
                   {/* last move tint */}
                   {(isLastFrom || isLastTo) && (
-                    <span className="pointer-events-none absolute inset-0 bg-gradient-to-br from-brand/25 to-brand-3/20" />
+                    <span
+                      className="pointer-events-none absolute inset-0"
+                      style={{
+                        background: boardSkin === "chrome"
+                          ? "linear-gradient(135deg, rgba(56,224,250,.15), rgba(124,92,246,.1))"
+                          : "linear-gradient(135deg, rgba(124,92,246,.25), rgba(56,224,250,.2))",
+                        boxShadow: boardSkin === "chrome" ? "inset 0 0 16px rgba(56,224,250,.1)" : undefined,
+                      }}
+                    />
                   )}
                   {/* selected ring */}
                   {isSelected && (
-                    <span className="pointer-events-none absolute inset-0 rounded-[6%] shadow-[inset_0_0_0_3px_rgb(var(--brand))]" />
+                    <span
+                      className="pointer-events-none absolute inset-0 rounded-[6%]"
+                      style={{
+                        boxShadow: boardSkin === "chrome"
+                          ? "inset 0 0 0 2px rgba(56,224,250,.6), 0 0 16px rgba(56,224,250,.2)"
+                          : "inset 0 0 0 3px rgb(var(--brand))",
+                      }}
+                    />
                   )}
                   {/* keyboard cursor */}
                   {isCursor && (
@@ -299,13 +345,24 @@ export function Board({ onMoveSettled, viewerSide, interactive = true }: BoardPr
                     <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
                       {captureHint ? (
                         <span
-                          className="rounded-full border-2 border-bad/80 bg-bad/10 animate-pulse-hint"
-                          style={{ width: cell * 0.82, height: cell * 0.82 }}
+                          className="rounded-full border-2 animate-pulse-hint"
+                          style={{
+                            width: cell * 0.82,
+                            height: cell * 0.82,
+                            borderColor: boardSkin === "chrome" ? "rgba(56,224,250,.7)" : "rgba(239,68,68,.8)",
+                            background: boardSkin === "chrome" ? "rgba(56,224,250,.08)" : "rgba(239,68,68,.1)",
+                            boxShadow: boardSkin === "chrome" ? "0 0 20px rgba(56,224,250,.25)" : undefined,
+                          }}
                         />
                       ) : (
                         <span
-                          className="rounded-full bg-brand/70 animate-pulse-hint"
-                          style={{ width: cell * 0.28, height: cell * 0.28 }}
+                          className="rounded-full animate-pulse-hint"
+                          style={{
+                            width: cell * 0.28,
+                            height: cell * 0.28,
+                            background: boardSkin === "chrome" ? "rgba(56,224,250,.6)" : "rgba(124,92,246,.7)",
+                            boxShadow: boardSkin === "chrome" ? "0 0 12px rgba(56,224,250,.4)" : undefined,
+                          }}
                         />
                       )}
                     </span>

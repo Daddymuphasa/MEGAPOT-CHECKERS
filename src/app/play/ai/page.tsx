@@ -14,8 +14,10 @@ import { Card } from "@/components/ui/card";
 import { AuroraBackground } from "@/components/layout/AuroraBackground";
 import { TopBar } from "@/components/layout/TopBar";
 import { useGameStore } from "@/store/game-store";
+import { useWagerStore } from "@/lib/megapot/wager-store";
 import { getAI } from "@/lib/ai";
 import { OTHER, type Player } from "@/lib/game/types";
+import { Coins } from "lucide-react";
 
 export default function AiPlayPage() {
   const router = useRouter();
@@ -37,7 +39,17 @@ export default function AiPlayPage() {
   const aiSide = OTHER[humanSide];
   const busy = React.useRef(false);
 
+  const wagerPot = useWagerStore((s) => s.pot);
+  const wagerOutcome = useWagerStore((s) => s.outcome);
+  const wagerStake = useWagerStore((s) => s.stake);
+  const bankroll = useWagerStore((s) => s.bankroll);
+
   const start = (c: AiConfig) => {
+    const w = useWagerStore.getState();
+    w.clear();
+    // Buy the $1+ entry ticket (Hard only). If the bankroll can't cover it,
+    // fall back to a free game rather than blocking the match.
+    if (c.wager > 0 && !w.buyEntry(c.wager)) c = { ...c, wager: 0 };
     setCfg(c);
     newGame({
       mode: "ai",
@@ -76,6 +88,31 @@ export default function AiPlayPage() {
   }, [phase, cfg, toMove, animating, resultKind, aiSide, commitMove, setAiThinking]);
 
   React.useEffect(() => () => getAI().dispose(), []);
+
+  // Settle the winner-takes-all pot the moment the match ends.
+  React.useEffect(() => {
+    if (phase !== "playing" || resultKind === "playing") return;
+    const w = useWagerStore.getState();
+    if (w.stake === 0 || w.settled) return;
+    const r = useGameStore.getState().result;
+    if (r.kind === "playing") return;
+    w.settle(
+      r.kind === "draw"
+        ? "draw"
+        : r.winner === humanSide
+          ? "win"
+          : "lose",
+    );
+  }, [phase, resultKind, humanSide]);
+
+  const rematch = () => {
+    const w = useWagerStore.getState();
+    w.clear();
+    // Re-buy the same entry ticket; drop to a free game if broke.
+    if (cfg && cfg.wager > 0 && !w.buyEntry(cfg.wager))
+      setCfg({ ...cfg, wager: 0 });
+    restart();
+  };
 
   if (phase === "setup") {
     return (
@@ -151,6 +188,25 @@ export default function AiPlayPage() {
               </div>
             </Card>
 
+            {cfg && cfg.wager > 0 && (
+              <Card className="border border-gold/25">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-gold to-amber-400 text-black">
+                    <Coins className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-display font-semibold tabular-nums">
+                      ${wagerPot} pot
+                    </div>
+                    <div className="text-xs text-muted">
+                      ${wagerStake} each · winner takes all · bankroll $
+                      {bankroll}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+
             <Card>
               <h3 className="mb-3 font-display font-semibold">Controls</h3>
               <GameControls />
@@ -162,9 +218,28 @@ export default function AiPlayPage() {
       <EndGameModal
         result={result}
         perspective={humanSide}
-        onRematch={restart}
+        onRematch={rematch}
         onHome={() => router.push("/")}
-      />
+      >
+        {cfg && cfg.wager > 0 && wagerOutcome && (
+          <div
+            className={`flex items-center justify-center gap-2 rounded-xl border p-3 text-sm font-semibold tabular-nums ${
+              wagerOutcome === "win"
+                ? "border-gold/40 bg-gold/10 text-gold"
+                : wagerOutcome === "draw"
+                  ? "border-border bg-surface-2/60 text-muted"
+                  : "border-bad/30 bg-bad/10 text-bad"
+            }`}
+          >
+            <Coins className="h-4 w-4" />
+            {wagerOutcome === "win"
+              ? `You take the pot: +$${wagerPot}`
+              : wagerOutcome === "draw"
+                ? `Draw — your $${wagerStake} ticket is refunded`
+                : `The machine keeps your $${wagerStake} ticket`}
+          </div>
+        )}
+      </EndGameModal>
     </>
   );
 }
