@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ConnectWallet } from "@/components/megapot/ConnectWallet";
 import { useWagerStore } from "@/lib/megapot/wager-store";
+import { isEscrowLive } from "@/lib/megapot/escrow-config";
 import { cn } from "@/lib/utils";
 
 export interface LobbyResult {
@@ -40,6 +41,7 @@ export function Lobby({
   const [withPowers, setWithPowers] = React.useState(!pairMode);
   const [stakeUsd, setStakeUsd] = React.useState(pairMode ? 0 : 1);
   const bankroll = useWagerStore((s) => s.bankroll);
+  const liveEscrow = isEscrowLive();
 
   return (
     <motion.div
@@ -92,9 +94,14 @@ export function Lobby({
               <div className="mb-3 flex items-center justify-between">
                 <span className="flex items-center gap-2 text-sm">
                   <Coins className="h-4 w-4 text-gold" />
-                  Entry ticket
+                  {liveEscrow ? "USDC wager" : "Entry ticket"}
                 </span>
-                <span className="text-xs text-muted">Bankroll ${bankroll}</span>
+                {!liveEscrow && (
+                  <span className="text-xs text-muted">Bankroll ${bankroll}</span>
+                )}
+                {liveEscrow && (
+                  <span className="text-xs text-gold">Real USDC on Base</span>
+                )}
               </div>
               <div className="grid grid-cols-5 gap-2">
                 {STAKE_OPTIONS.map((w) => (
@@ -114,7 +121,8 @@ export function Lobby({
               </div>
               {stakeUsd > 0 && (
                 <p className="mt-2 text-xs text-muted">
-                  Both stake ${stakeUsd} — winner takes ${stakeUsd * 2}.
+                  Both stake ${stakeUsd} {liveEscrow ? "USDC" : ""} — winner takes ${stakeUsd * 2}.
+                  {liveEscrow && " Settled on-chain via escrow."}
                 </p>
               )}
             </div>

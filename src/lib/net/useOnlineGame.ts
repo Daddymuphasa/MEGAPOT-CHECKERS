@@ -9,6 +9,8 @@ import { seatToPlayer, type RoomEvent, type RoomPlayer, type Seat } from "./prot
 import { inco } from "@/lib/inco/client";
 import { assignPowers } from "@/lib/inco/powers";
 import { useWagerStore } from "@/lib/megapot/wager-store";
+import { escrow } from "@/lib/megapot/escrow-client";
+import { isEscrowLive, escrowConfig } from "@/lib/megapot/escrow-config";
 import { sound } from "@/lib/sound";
 
 export type OnlinePhase =
@@ -38,6 +40,10 @@ export interface OnlineState {
   reveal: { mine?: number; theirs?: number } | null;
   settleTx: string | null;
   toast: { id: number; text: string; kind: "power" | "info" } | null;
+  /** On-chain escrow game ID (set when escrow is live). */
+  escrowGameId: bigint | null;
+  /** Whether this match uses real USDC escrow. */
+  escrowLive: boolean;
 }
 
 const initialInco = {
@@ -47,12 +53,15 @@ const initialInco = {
   reveal: null as OnlineState["reveal"],
   settleTx: null as string | null,
   toast: null as OnlineState["toast"],
+  escrowGameId: null as bigint | null,
+  escrowLive: isEscrowLive(),
 };
 
-export function useOnlineGame() {
+export function useOnlineGame(walletClient?: import("viem").WalletClient | null) {
   const conn = React.useRef<RoomConnection | null>(null);
   const applyingRemote = React.useRef(false);
   const myPowerSeed = React.useRef<bigint>(0n);
+  const escrowGameIdRef = React.useRef<bigint | null>(null);
   const [state, setState] = React.useState<OnlineState>({
     phase: "lobby",
     busy: false,
@@ -233,6 +242,14 @@ export function useOnlineGame() {
   }) {
     patch({ busy: true, error: null });
     try {
+      // Create on-chain escrow game if live and wager > 0
+      let escrowId: bigint | null = null;
+      if (isEscrowLive() && opts.stakeUsd > 0 && walletClient) {
+        const result = await escrow().createGame(opts.stakeUsd, walletClient);
+        escrowId = result.gameId;
+        escrowGameIdRef.current = escrowId;
+      }
+
       const { code } = await RoomConnection.create({
         name: opts.name,
         address: opts.address,
@@ -262,6 +279,8 @@ export function useOnlineGame() {
         wagerEnabled: opts.stakeUsd > 0,
         stakeUsd: opts.stakeUsd,
         players: [{ seat: "host", name: opts.name, ready: false }],
+        escrowGameId: escrowId,
+        escrowLive: isEscrowLive() && opts.stakeUsd > 0,
       });
     } catch (e) {
       patch({ busy: false, error: (e as Error).message });
@@ -288,6 +307,8 @@ export function useOnlineGame() {
         withPowers: snapshot.withPowers,
         allowUndo: false,
       });
+      const joinStake = snapshot.stakeUsd ?? 0;
+      const joinEscrowLive = isEscrowLive() && joinStake > 0;
       patch({
         busy: false,
         phase: snapshot.players.length >= 2 ? "committing" : "waiting",
@@ -296,9 +317,14 @@ export function useOnlineGame() {
         mySide: side,
         withPowers: snapshot.withPowers,
         wagerEnabled: snapshot.wagerEnabled,
-        stakeUsd: snapshot.stakeUsd ?? 0,
+        stakeUsd: joinStake,
         players: snapshot.players,
+        escrowLive: joinEscrowLive,
+        escrowGameId: snapshot.escrowGameId ? BigInt(snapshot.escrowGameId) : null,
       });
+      if (snapshot.escrowGameId) {
+        escrowGameIdRef.current = BigInt(snapshot.escrowGameId);
+      }
     } catch (e) {
       patch({ busy: false, error: (e as Error).message });
     }
@@ -334,9 +360,19 @@ export function useOnlineGame() {
     const stake = state.wagerEnabled ? state.stakeUsd : 0;
     patch({ busy: true, myStake: stake });
 
-    // Buy the entry ticket from the demo bankroll (auto top-up keeps the
-    // flow frictionless — it's demo money).
-    if (stake > 0) {
+    // If escrow is live and we're the guest joining a wager game, join on-chain
+    const gid = escrowGameIdRef.current ?? state.escrowGameId;
+    if (state.escrowLive && gid && stake > 0 && state.seat === "guest" && walletClient) {
+      try {
+        await escrow().joinGame(gid, walletClient);
+      } catch (e) {
+        patch({ busy: false, error: (e as Error).message });
+        return;
+      }
+    }
+
+    // Buy the entry ticket from the demo bankroll when not using real escrow
+    if (stake > 0 && !state.escrowLive) {
       let w = useWagerStore.getState();
       w.clear();
       while (useWagerStore.getState().bankroll < stake)
@@ -392,17 +428,58 @@ export function useOnlineGame() {
     });
   }
 
-  function reportWinner(winner: Player | "draw") {
+  async function reportWinner(winner: Player | "draw") {
     if (!conn.current || !state.seat) return;
     conn.current.emit({ type: "settle", winner });
+
+    // Report winner on-chain via escrow if live
+    const gid = escrowGameIdRef.current ?? state.escrowGameId;
+    if (state.escrowLive && gid && walletClient?.account) {
+      try {
+        const winnerAddr: `0x${string}` =
+          winner === "draw"
+            ? "0x0000000000000000000000000000000000000000"
+            : winner === state.mySide
+              ? walletClient.account.address
+              : (state.players.find((p) => p.seat !== state.seat)?.address as `0x${string}`) ??
+                "0x0000000000000000000000000000000000000000";
+        await escrow().reportWinner(gid, winnerAddr, walletClient);
+      } catch (e) {
+        console.error("Escrow reportWinner failed:", e);
+      }
+    }
+
     patch({ phase: "ended" });
   }
 
   async function revealStakes() {
     if (!conn.current || !state.seat) return;
     patch({ busy: true });
-    // In a live deployment this calls contract.revealStakes + attestedReveal.
-    // Here each peer broadcasts its own confidence (a commit–reveal scheme).
+
+    const gid = escrowGameIdRef.current ?? state.escrowGameId;
+
+    // If escrow is live, try to claim the pot on-chain
+    if (state.escrowLive && gid && walletClient) {
+      try {
+        const claimHash = await escrow().claim(gid, walletClient);
+        conn.current.emit({
+          type: "reveal",
+          powers: [{ pieceId: "confidence", power: String(state.myStake) }],
+          by: state.seat,
+        });
+        patch({
+          busy: false,
+          settleTx: claimHash,
+          reveal: { mine: state.myStake },
+        });
+        return;
+      } catch (e) {
+        // Claim may fail if we're not the winner or not yet settled — fall through
+        console.error("Escrow claim:", e);
+      }
+    }
+
+    // Fallback: demo mode reveal
     conn.current.emit({
       type: "reveal",
       powers: [{ pieceId: "confidence", power: String(state.myStake) }],
@@ -430,7 +507,7 @@ export function useOnlineGame() {
 
   React.useEffect(() => () => conn.current?.close(), []);
 
-  return { state, create, join, commit, reportWinner, revealStakes, leave };
+  return { state, create, join, commit, reportWinner, revealStakes, leave, escrowLive: isEscrowLive() };
 }
 
 function dedupePlayers(players: RoomPlayer[]): RoomPlayer[] {

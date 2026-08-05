@@ -13,7 +13,7 @@ import {
   ExternalLink,
   Coins,
 } from "lucide-react";
-import { useAccount } from "wagmi";
+import { useAccount, useWalletClient } from "wagmi";
 import { Board } from "@/components/board/Board";
 import { GameLayout } from "@/components/game/GameLayout";
 import { PlayerCard } from "@/components/game/PlayerCard";
@@ -49,8 +49,9 @@ function OnlineInner() {
   const deepLinkCode = searchParams.get("code");
   const pairMode = searchParams.get("pair") === "1";
   const { address } = useAccount();
-  const { state, create, join, commit, reportWinner, revealStakes, leave } =
-    useOnlineGame();
+  const { data: walletClient } = useWalletClient();
+  const { state, create, join, commit, reportWinner, revealStakes, leave, escrowLive } =
+    useOnlineGame(walletClient);
 
   const result = useGameStore((s) => s.result);
   const toMove = useGameStore((s) => s.toMove);
@@ -360,6 +361,7 @@ function OnlineInner() {
           settleTx={state.settleTx}
           busy={state.busy}
           stakeUsd={state.stakeUsd}
+          escrowLive={state.escrowLive}
         />
       </EndGameModal>
     </>
@@ -371,24 +373,28 @@ function SettlePanel({
   settleTx,
   busy,
   stakeUsd,
+  escrowLive,
 }: {
   reveal: { mine?: number; theirs?: number } | null;
   settleTx: string | null;
   busy: boolean;
   stakeUsd: number;
+  escrowLive: boolean;
 }) {
   if (stakeUsd === 0 && !settleTx) return null;
+  const explorer = escrowLive ? "https://basescan.org" : incoConfig.explorer;
+  const txLabel = escrowLive ? "View on BaseScan" : "Attestation tx";
   return (
     <div className="rounded-xl border border-brand/30 bg-brand/5 p-4 text-left">
       <div className="flex items-center gap-2 text-sm font-semibold">
         <Coins className="h-4 w-4 text-gold" />
-        Match stakes
+        {escrowLive ? "USDC escrow" : "Match stakes"}
       </div>
       {!settleTx ? (
         <div className="mt-2 space-y-1.5 text-sm">
           <div className="flex justify-between">
             <span className="text-muted">Your stake</span>
-            <span className="font-mono">${reveal?.mine ?? stakeUsd}</span>
+            <span className="font-mono">${reveal?.mine ?? stakeUsd} {escrowLive ? "USDC" : ""}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted">Opponent stake</span>
@@ -399,7 +405,7 @@ function SettlePanel({
           {busy && (
             <div className="flex items-center gap-1.5 pt-1 text-xs text-muted">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Settling…
+              Settling on-chain…
             </div>
           )}
         </div>
@@ -407,7 +413,7 @@ function SettlePanel({
         <div className="mt-2 space-y-1.5 text-sm">
           <div className="flex justify-between">
             <span className="text-muted">Your stake</span>
-            <span className="font-mono">${reveal?.mine ?? stakeUsd}</span>
+            <span className="font-mono">${reveal?.mine ?? stakeUsd} {escrowLive ? "USDC" : ""}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted">Opponent stake</span>
@@ -417,11 +423,11 @@ function SettlePanel({
           </div>
           <a
             className="mt-1 flex items-center gap-1 text-xs text-brand hover:underline"
-            href={`${incoConfig.explorer}/tx/${settleTx}`}
+            href={`${explorer}/tx/${settleTx}`}
             target="_blank"
             rel="noreferrer"
           >
-            Attestation tx <ExternalLink className="h-3 w-3" />
+            {txLabel} <ExternalLink className="h-3 w-3" />
           </a>
         </div>
       )}

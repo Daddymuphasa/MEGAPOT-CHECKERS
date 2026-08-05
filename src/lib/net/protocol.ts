@@ -42,4 +42,6 @@ export interface RoomSnapshot {
   wagerEnabled: boolean;
   /** Winner-takes-all stake in whole dollars (0 = friendly game). */
   stakeUsd: number;
+  /** On-chain escrow game ID (present when host created an escrow game). */
+  escrowGameId?: string;
 }
