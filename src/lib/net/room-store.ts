@@ -2,158 +2,214 @@ import "server-only";
 import type { Move } from "@/lib/game/types";
 import type { RoomEvent, RoomPlayer, RoomSnapshot, Seat } from "./protocol";
 import { makeRoomCode } from "@/lib/utils";
+import { backend, isDurable } from "./store-backend";
 
-interface Client {
-  clientId: string;
-  seat: Seat;
-  send: (ev: RoomEvent) => void;
-}
+/**
+ * Durable room registry.
+ *
+ * Every serverless invocation is a fresh process, so nothing may live in
+ * module memory: room config, per-seat player records and the event log all
+ * go through `backend` (Upstash Redis in production, an in-process map in
+ * dev). Clients poll `readEvents` with a cursor rather than holding an SSE
+ * stream, because Vercel caps function duration well below a game's length.
+ */
 
-interface Room {
+const ROOM_TTL = 6 * 60 * 60; // 6h — matches the old gc() window
+const PRESENCE_TTL = 15; // a client polling ~1/s is "gone" after 15s
+
+export { isDurable };
+
+/** Immutable room configuration, written once at create time. */
+interface RoomMeta {
   code: string;
   createdAt: number;
-  players: RoomPlayer[];
-  clients: Client[];
-  moves: { move: Move; by: Seat }[];
-  started: boolean;
   withPowers: boolean;
   wagerEnabled: boolean;
   stakeUsd: number;
-  result?: string;
+  escrowGameId?: string;
 }
 
-/**
- * In-memory room registry. Survives dev HMR via globalThis. This works for a
- * single Node process (`next dev` / a single `next start` instance). For a
- * multi-instance production deploy, swap this module for a durable pub/sub
- * (e.g. Upstash Redis) — the surface is intentionally tiny. See README.
- */
-const g = globalThis as unknown as { __megapotRooms?: Map<string, Room> };
-g.__megapotRooms ??= new Map<string, Room>();
-const rooms = g.__megapotRooms;
-
-// Garbage-collect stale rooms (older than 6h) opportunistically.
-function gc() {
-  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
-  for (const [code, room] of rooms) {
-    if (room.createdAt < cutoff && room.clients.length === 0) rooms.delete(code);
-  }
+/** An event as stored in the log, tagged with who sent it. */
+export interface LoggedEvent {
+  /** Emitting clientId, so the sender can filter out its own echo. */
+  from?: string;
+  ev: RoomEvent;
 }
 
-export function createRoom(opts: {
+const kMeta = (code: string) => `mc:${code}:meta`;
+const kPlayer = (code: string, seat: Seat) => `mc:${code}:p:${seat}`;
+const kEvents = (code: string) => `mc:${code}:ev`;
+const kResult = (code: string) => `mc:${code}:result`;
+const kSeen = (code: string, clientId: string) => `mc:${code}:seen:${clientId}`;
+const kSeat = (code: string, seat: Seat) => `mc:${code}:seat:${seat}`;
+
+const norm = (code: string) => code.trim().toUpperCase();
+
+export async function createRoom(opts: {
   withPowers: boolean;
   wagerEnabled: boolean;
   stakeUsd: number;
   hostName: string;
   hostAddress?: string;
-}): Room {
-  gc();
+  escrowGameId?: string;
+}): Promise<RoomMeta> {
+  // Claim a free code. Collisions are vanishingly rare, but NX makes the
+  // check atomic rather than read-then-write.
   let code = makeRoomCode();
-  while (rooms.has(code)) code = makeRoomCode();
-  const room: Room = {
-    code,
-    createdAt: Date.now(),
-    players: [
-      {
-        seat: "host",
-        name: opts.hostName || "Host",
-        address: opts.hostAddress,
-        ready: false,
-      },
-    ],
-    clients: [],
-    moves: [],
-    started: false,
-    withPowers: opts.withPowers,
-    wagerEnabled: opts.wagerEnabled,
-    stakeUsd: opts.stakeUsd,
-  };
-  rooms.set(code, room);
-  return room;
+  for (let i = 0; i < 5; i++) {
+    const meta: RoomMeta = {
+      code,
+      createdAt: Date.now(),
+      withPowers: opts.withPowers,
+      wagerEnabled: opts.wagerEnabled,
+      stakeUsd: opts.stakeUsd,
+      escrowGameId: opts.escrowGameId,
+    };
+    if (await backend.setIfAbsent(kMeta(code), meta, ROOM_TTL)) {
+      await backend.set(
+        kPlayer(code, "host"),
+        {
+          seat: "host",
+          name: opts.hostName || "Host",
+          address: opts.hostAddress,
+          ready: false,
+        } satisfies RoomPlayer,
+        ROOM_TTL,
+      );
+      return meta;
+    }
+    code = makeRoomCode();
+  }
+  throw new Error("Could not allocate a room code");
 }
 
-export function getRoom(code: string): Room | undefined {
-  return rooms.get(code.toUpperCase());
+export async function getMeta(code: string): Promise<RoomMeta | null> {
+  return backend.get<RoomMeta>(kMeta(norm(code)));
 }
 
-export function joinRoom(
+export async function getPlayers(code: string): Promise<RoomPlayer[]> {
+  const c = norm(code);
+  const [host, guest] = await backend.mget<RoomPlayer>([
+    kPlayer(c, "host"),
+    kPlayer(c, "guest"),
+  ]);
+  return [host, guest].filter((p): p is RoomPlayer => p !== null);
+}
+
+/**
+ * Claim the guest seat. `setIfAbsent` makes this race-free: if two people
+ * open the same code at once, exactly one gets the seat.
+ */
+export async function joinRoom(
   code: string,
   opts: { name: string; address?: string },
-): { room: Room; seat: Seat } | { error: string } {
-  const room = getRoom(code);
-  if (!room) return { error: "Room not found" };
-  const existingGuest = room.players.find((p) => p.seat === "guest");
-  if (!existingGuest) {
-    room.players.push({
-      seat: "guest",
-      name: opts.name || "Guest",
-      address: opts.address,
-      ready: false,
-    });
-    broadcast(code, { type: "peer-joined", name: opts.name, seat: "guest" });
-    return { room, seat: "guest" };
-  }
-  // Room full → allow only a reconnect by the same seat (spectators not allowed).
-  return { error: "Room is full" };
+): Promise<{ seat: Seat; snapshot: RoomSnapshot } | { error: string }> {
+  const c = norm(code);
+  const meta = await getMeta(c);
+  if (!meta) return { error: "Room not found" };
+
+  const claimed = await backend.setIfAbsent(
+    kSeat(c, "guest"),
+    Date.now(),
+    ROOM_TTL,
+  );
+  if (!claimed) return { error: "Room is full" };
+
+  const guest: RoomPlayer = {
+    seat: "guest",
+    name: opts.name || "Guest",
+    address: opts.address,
+    ready: false,
+  };
+  await backend.set(kPlayer(c, "guest"), guest, ROOM_TTL);
+  await appendEvent(c, { type: "peer-joined", name: guest.name, seat: "guest" });
+
+  return { seat: "guest", snapshot: await snapshot(c) };
 }
 
-export function snapshot(room: Room): RoomSnapshot {
+export async function snapshot(code: string): Promise<RoomSnapshot> {
+  const c = norm(code);
+  const [meta, players, log] = await Promise.all([
+    getMeta(c),
+    getPlayers(c),
+    backend.range<LoggedEvent>(kEvents(c), 0, -1),
+  ]);
+  const moves = log
+    .filter((l): l is LoggedEvent & { ev: Extract<RoomEvent, { type: "move" }> } =>
+      l.ev.type === "move",
+    )
+    .map((l) => ({ move: l.ev.move as Move, by: l.ev.by }));
+
   return {
-    code: room.code,
-    players: room.players.map((p) => ({ ...p })),
-    moves: room.moves.map((m) => ({ ...m })),
-    started: room.started,
-    withPowers: room.withPowers,
-    wagerEnabled: room.wagerEnabled,
-    stakeUsd: room.stakeUsd,
+    code: c,
+    players,
+    moves,
+    started: moves.length > 0,
+    withPowers: meta?.withPowers ?? true,
+    wagerEnabled: meta?.wagerEnabled ?? false,
+    stakeUsd: meta?.stakeUsd ?? 0,
+    escrowGameId: meta?.escrowGameId,
   };
 }
 
-export function addClient(code: string, client: Client) {
-  const room = getRoom(code);
-  if (!room) return;
-  room.clients.push(client);
+/** Append to the room's event log. Readers pick it up on their next poll. */
+export async function appendEvent(
+  code: string,
+  ev: RoomEvent,
+  from?: string,
+): Promise<void> {
+  await backend.push(kEvents(norm(code)), { from, ev } satisfies LoggedEvent, ROOM_TTL);
 }
 
-export function removeClient(code: string, clientId: string) {
-  const room = getRoom(code);
-  if (!room) return;
-  room.clients = room.clients.filter((c) => c.clientId !== clientId);
+/** Events after `since`, plus the new cursor. */
+export async function readEvents(
+  code: string,
+  since: number,
+): Promise<{ events: LoggedEvent[]; cursor: number }> {
+  const from = Math.max(0, since);
+  const events = await backend.range<LoggedEvent>(kEvents(norm(code)), from, -1);
+  return { events, cursor: from + events.length };
 }
 
-/** Send an event to every client except the optional excluded clientId. */
-export function broadcast(code: string, ev: RoomEvent, exceptClientId?: string) {
-  const room = getRoom(code);
-  if (!room) return;
-  for (const c of room.clients) {
-    if (c.clientId === exceptClientId) continue;
-    try {
-      c.send(ev);
-    } catch {
-      /* dropped client; cleaned up on stream close */
-    }
-  }
-}
-
-export function recordMove(code: string, move: Move, by: Seat) {
-  const room = getRoom(code);
-  if (!room) return;
-  room.started = true;
-  room.moves.push({ move, by });
-}
-
-export function setPlayer(
+export async function setPlayer(
   code: string,
   seat: Seat,
   patch: Partial<RoomPlayer>,
-) {
-  const room = getRoom(code);
-  if (!room) return;
-  const p = room.players.find((x) => x.seat === seat);
-  if (p) Object.assign(p, patch);
+): Promise<void> {
+  const c = norm(code);
+  const current = await backend.get<RoomPlayer>(kPlayer(c, seat));
+  if (!current) return;
+  await backend.set(kPlayer(c, seat), { ...current, ...patch }, ROOM_TTL);
 }
 
-export function setResult(code: string, result: string) {
-  const room = getRoom(code);
-  if (room) room.result = result;
+export async function setResult(code: string, result: string): Promise<void> {
+  await backend.set(kResult(norm(code)), result, ROOM_TTL);
+}
+
+/** Refresh this client's presence marker. */
+export async function touchClient(code: string, clientId: string): Promise<void> {
+  await backend.touch(kSeen(norm(code), clientId), PRESENCE_TTL);
+}
+
+/**
+ * Which seats currently have a live client. Derived from self-expiring
+ * presence keys, so a crashed tab drops out on its own.
+ */
+export async function presence(
+  code: string,
+): Promise<Record<Seat, boolean>> {
+  const c = norm(code);
+  const players = await getPlayers(c);
+  const seats = players.map((p) => p.seat);
+  const marks = await backend.exists(
+    seats.map((s) => `mc:${c}:live:${s}`),
+  );
+  const out: Record<Seat, boolean> = { host: false, guest: false };
+  seats.forEach((s, i) => (out[s] = marks[i]));
+  return out;
+}
+
+/** Mark a seat as live (called on every poll). */
+export async function touchSeat(code: string, seat: Seat): Promise<void> {
+  await backend.touch(`mc:${norm(code)}:live:${seat}`, PRESENCE_TTL);
 }

@@ -256,6 +256,8 @@ export function useOnlineGame(walletClient?: import("viem").WalletClient | null)
         withPowers: opts.withPowers,
         wagerEnabled: opts.stakeUsd > 0,
         stakeUsd: opts.stakeUsd,
+        // Carried in the room so the guest can join the same on-chain game.
+        escrowGameId: escrowId !== null ? String(escrowId) : undefined,
       });
       const c = new RoomConnection();
       conn.current = c;
