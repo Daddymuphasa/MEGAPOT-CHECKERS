@@ -439,7 +439,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <main className="relative flex min-h-dvh flex-col">
       <AuroraBackground />
-      <TopBar title="Online + Inco" />
+      <TopBar title="Online PvP" />
       <div className="flex flex-1 items-center justify-center p-4">
         {children}
       </div>

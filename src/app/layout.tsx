@@ -11,13 +11,30 @@ const sora = Sora({
   weight: ["500", "600", "700", "800"],
 });
 
+const SITE = "https://megapot-checkers.vercel.app";
+const TITLE = "Megapot Checkers — play checkers for real USDC on Base";
+const DESCRIPTION =
+  "A buttery-smooth Checkers game. Play the AI free with no wallet, or stake real USDC online — winner takes the pot, settled by contract on Base.";
+
 export const metadata: Metadata = {
-  title: "Megapot Checkers — Private Checkers, powered by Inco Lightning",
-  description:
-    "A stunning, buttery-smooth Checkers game. Play local, vs AI, or online with confidential wagers powered by Inco Lightning on Base.",
+  metadataBase: new URL(SITE),
+  title: TITLE,
+  description: DESCRIPTION,
   applicationName: "Megapot Checkers",
   authors: [{ name: "Megapot" }],
-  keywords: ["checkers", "draughts", "inco", "base", "web3 game", "confidential"],
+  keywords: ["checkers", "draughts", "megapot", "base", "usdc", "web3 game"],
+  openGraph: {
+    type: "website",
+    url: SITE,
+    siteName: "Megapot Checkers",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+  },
 };
 
 export const viewport: Viewport = {
