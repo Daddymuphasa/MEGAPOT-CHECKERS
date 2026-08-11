@@ -45,6 +45,30 @@ const kSeat = (code: string, seat: Seat) => `mc:${code}:seat:${seat}`;
 
 const norm = (code: string) => code.trim().toUpperCase();
 
+/**
+ * Build a snapshot from values already in hand.
+ *
+ * Upstash can serve a read from a replica that hasn't caught up with a write
+ * from microseconds earlier, so callers that just wrote a player must not
+ * read it straight back — they pass what they wrote instead.
+ */
+export function snapshotFrom(
+  meta: RoomMeta,
+  players: RoomPlayer[],
+  moves: { move: Move; by: Seat }[] = [],
+): RoomSnapshot {
+  return {
+    code: meta.code,
+    players,
+    moves,
+    started: moves.length > 0,
+    withPowers: meta.withPowers,
+    wagerEnabled: meta.wagerEnabled,
+    stakeUsd: meta.stakeUsd,
+    escrowGameId: meta.escrowGameId,
+  };
+}
+
 export async function createRoom(opts: {
   withPowers: boolean;
   wagerEnabled: boolean;
@@ -52,7 +76,7 @@ export async function createRoom(opts: {
   hostName: string;
   hostAddress?: string;
   escrowGameId?: string;
-}): Promise<RoomMeta> {
+}): Promise<{ meta: RoomMeta; host: RoomPlayer }> {
   // Claim a free code. Collisions are vanishingly rare, but NX makes the
   // check atomic rather than read-then-write.
   let code = makeRoomCode();
@@ -66,17 +90,14 @@ export async function createRoom(opts: {
       escrowGameId: opts.escrowGameId,
     };
     if (await backend.setIfAbsent(kMeta(code), meta, ROOM_TTL)) {
-      await backend.set(
-        kPlayer(code, "host"),
-        {
-          seat: "host",
-          name: opts.hostName || "Host",
-          address: opts.hostAddress,
-          ready: false,
-        } satisfies RoomPlayer,
-        ROOM_TTL,
-      );
-      return meta;
+      const host: RoomPlayer = {
+        seat: "host",
+        name: opts.hostName || "Host",
+        address: opts.hostAddress,
+        ready: false,
+      };
+      await backend.set(kPlayer(code, "host"), host, ROOM_TTL);
+      return { meta, host };
     }
     code = makeRoomCode();
   }
@@ -124,32 +145,42 @@ export async function joinRoom(
   await backend.set(kPlayer(c, "guest"), guest, ROOM_TTL);
   await appendEvent(c, { type: "peer-joined", name: guest.name, seat: "guest" });
 
-  return { seat: "guest", snapshot: await snapshot(c) };
+  // Read only the host back; pair it with the guest we just wrote rather than
+  // re-reading a value that may not have replicated yet.
+  const [host, moves] = await Promise.all([
+    backend.get<RoomPlayer>(kPlayer(c, "host")),
+    readMoves(c),
+  ]);
+  const players = host ? [host, guest] : [guest];
+  return { seat: "guest", snapshot: snapshotFrom(meta, players, moves) };
+}
+
+/** Moves are derived from the event log rather than stored separately. */
+async function readMoves(code: string): Promise<{ move: Move; by: Seat }[]> {
+  const log = await backend.range<LoggedEvent>(kEvents(norm(code)), 0, -1);
+  return log
+    .filter((l) => l.ev.type === "move")
+    .map((l) => {
+      const ev = l.ev as Extract<RoomEvent, { type: "move" }>;
+      return { move: ev.move, by: ev.by };
+    });
 }
 
 export async function snapshot(code: string): Promise<RoomSnapshot> {
   const c = norm(code);
-  const [meta, players, log] = await Promise.all([
+  const [meta, players, moves] = await Promise.all([
     getMeta(c),
     getPlayers(c),
-    backend.range<LoggedEvent>(kEvents(c), 0, -1),
+    readMoves(c),
   ]);
-  const moves = log
-    .filter((l): l is LoggedEvent & { ev: Extract<RoomEvent, { type: "move" }> } =>
-      l.ev.type === "move",
-    )
-    .map((l) => ({ move: l.ev.move as Move, by: l.ev.by }));
-
-  return {
+  const fallback: RoomMeta = {
     code: c,
-    players,
-    moves,
-    started: moves.length > 0,
-    withPowers: meta?.withPowers ?? true,
-    wagerEnabled: meta?.wagerEnabled ?? false,
-    stakeUsd: meta?.stakeUsd ?? 0,
-    escrowGameId: meta?.escrowGameId,
+    createdAt: 0,
+    withPowers: true,
+    wagerEnabled: false,
+    stakeUsd: 0,
   };
+  return snapshotFrom(meta ?? fallback, players, moves);
 }
 
 /** Append to the room's event log. Readers pick it up on their next poll. */
